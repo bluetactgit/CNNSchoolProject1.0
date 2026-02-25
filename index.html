@@ -1,0 +1,228 @@
+    <!DOCTYPE html>
+<html>
+<head>
+    <title>Shape Detector</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; display: flex; flex-direction: column; align-items: center; padding: 20px; color: #333; }
+        .container { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); text-align: center; width: 360px; }
+        .nav-bar { margin-bottom: 20px; }
+        button { padding: 10px 15px; margin: 5px; cursor: pointer; border-radius: 8px; border: 1px solid #ddd; background: #fff; transition: all 0.2s; font-size: 14px; }
+        button:hover { background: #f0f0f0; transform: translateY(-1px); }
+        .btn-main { background: #007bff; color: white; border: none; font-weight: bold; }
+        .btn-main:hover { background: #0056b3; }
+        .btn-export { background: #28a745; color: white; border: none; }
+        .btn-danger { color: #dc3545; border-color: #dc3545; font-size: 12px; margin-top: 20px; }
+    
+        canvas { border: 3px solid #444; background: white; touch-action: none; margin: 15px auto; display: block; border-radius: 10px; cursor: crosshair; transition: border 0.3s; }
+        .canvas-locked { border-color: #dc3545 !important; opacity: 0.8; cursor: not-allowed; }
+        .canvas-ready { border-color: #28a745 !important; }
+
+        .tab-content { display: none; }
+        .active { display: block; }
+        #status { font-weight: bold; color: #007bff; margin: 10px 0; min-height: 20px; }
+        #result { font-size: 24px; color: #333; margin-top: 10px; }
+        .percentage-list { list-style: none; padding: 0; margin: 15px 0; text-align: left; }
+        .percentage-list li { background: #f8f9fa; padding: 8px; margin: 4px 0; border-radius: 5px; font-family: monospace; }
+        hr { border: 0; border-top: 1px solid #eee; margin: 20px 0; }
+    </style>
+</head>
+
+<body>
+    <h1>Shape Detector</h1>
+    <div class="nav-bar">
+        <button onclick="showTab('train')">Training</button>
+        <button onclick="showTab('predict')">Prediction</button>
+    </div>
+
+    <div class="container">
+        <div id="train-tab" class="tab-content active">
+            <h3>Training Mode</h3>
+            <p id="status">Status: Initializing...</p>
+            <canvas id="trainCanvas" width="200" height="200"></canvas>
+            <div>
+                <button onclick="record(0)">Circle</button>
+                <button onclick="record(1)">Square</button>
+                <button onclick="record(2)">Triangle</button>
+            </div>
+            <button onclick="clearCanvas('trainCanvas')">Clear Pad</button>
+            <p>Shapes in Memory: <b id="count">0</b></p>
+            <button class="btn-main" onclick="train()">START TRAINING</button>
+            <hr>
+            <button class="btn-export" onclick="exportData()">Export Data (.json)</button>
+            <br>
+            <button class="btn-danger" onclick="resetData()">Reset All Memory</button>
+        </div>
+
+        <div id="predict-tab" class="tab-content">
+            <h3>Predict Mode</h3>
+            <canvas id="predictCanvas" width="200" height="200" class="canvas-ready"></canvas>
+            <button class="btn-main" onclick="guess()">Guess</button>
+            <button onclick="clearCanvas('predictCanvas')">Clear Pad</button>
+            <h2 id="result">Result: ???</h2>
+            <ul id="details" class="percentage-list"></ul>
+        </div>
+    </div>
+
+    <canvas id="hiddenCanvas" width="28" height="28" style="display:none"></canvas>
+
+    <script>
+        var inputs = []; var labels = []; var model;
+        var isTrained = false; 
+        var canPredictDraw = true; 
+        const DATA_URL = "./my_data.json";
+
+        window.onload = async function () {
+            createModel();
+            initCanvas('trainCanvas', false);
+            initCanvas('predictCanvas', true);
+            loadDataFromServer();
+        }
+
+        function createModel() {
+            model = tf.sequential();
+            model.add(tf.layers.conv2d({ inputShape: [28, 28, 1], kernelSize: 3, filters: 16, activation: 'relu' }));
+            model.add(tf.layers.maxPooling2d({ poolSize: [2, 2] }));
+            model.add(tf.layers.flatten());
+            model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
+            model.add(tf.layers.dense({ units: 3, activation: 'softmax' }));
+            model.compile({ optimizer: tf.train.adam(0.01), loss: 'categoricalCrossentropy' });
+        }
+
+        function initCanvas(id, isPredict) {
+            const cvs = document.getElementById(id); 
+            const ctx = cvs.getContext('2d'); 
+            let drawing = false;
+
+            const getPos = (e) => {
+                const r = cvs.getBoundingClientRect();
+                const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                return { x: clientX - r.left, y: clientY - r.top };
+            };
+            
+            cvs.addEventListener('pointerdown', (e) => {
+                if (isPredict && !canPredictDraw) return;
+                drawing = true; 
+                ctx.beginPath(); 
+                const p = getPos(e); 
+                ctx.moveTo(p.x, p.y);
+            });
+
+            cvs.addEventListener('pointermove', (e) => {
+                if (!drawing) return;
+                e.preventDefault();
+                const p = getPos(e); 
+                ctx.lineWidth = 12; 
+                ctx.lineCap = 'round'; 
+                ctx.lineTo(p.x, p.y); 
+                ctx.stroke();
+            });
+
+            // Using window for "up" ensures drawing stops even if mouse leaves canvas
+            window.addEventListener('pointerup', () => {
+                if (drawing && isPredict) {
+                    canPredictDraw = false;
+                    cvs.classList.add('canvas-locked');
+                    cvs.classList.remove('canvas-ready');
+                }
+                drawing = false;
+            });
+        }
+
+        function clearCanvas(id) { 
+            const cvs = document.getElementById(id);
+            cvs.getContext('2d').clearRect(0, 0, 200, 200); 
+            if (id === 'predictCanvas') {
+                canPredictDraw = true; 
+                cvs.classList.remove('canvas-locked');
+                cvs.classList.add('canvas-ready');
+            }
+        }
+
+        async function train() {
+            if (inputs.length < 3) { alert("Add some shapes first!"); return; }
+            document.getElementById('status').innerText = "AI is studying...";
+            const flat = new Float32Array(inputs.length * 784);
+            inputs.forEach((a, i) => flat.set(a, i * 784));
+            const xs = tf.tensor4d(flat, [inputs.length, 28, 28, 1]);
+            const ys = tf.tensor2d(labels, [labels.length, 3]);
+            await model.fit(xs, ys, { epochs: 60, shuffle: true });
+            isTrained = true;
+            document.getElementById('status').innerText = "Training Done! Ready to Predict.";
+        }
+
+        async function guess() {
+            if (!isTrained) {
+                alert("Please go to the Training tab and click 'START TRAINING' before guessing!");
+                return;
+            }
+            const res = getPixels('predictCanvas');
+            if (res.empty) { alert("Draw something first!"); return; }
+
+            const list = document.getElementById('details');
+            const names = ['Circle', 'Square', 'Triangle'];
+            list.innerHTML = "";
+            const t = tf.tensor4d(res.pixels, [1, 28, 28, 1]);
+            const p = model.predict(t);
+            const d = await p.data();
+            let bestS = 0; let bestM = "";
+            for (let i = 0; i < 3; i++) {
+                let pct = (d[i] * 100).toFixed(1);
+                list.innerHTML += `<li>${names[i]}: ${pct}%</li>`;
+                if (d[i] > bestS) { bestS = d[i]; bestM = names[i]; }
+            }
+            document.getElementById('result').innerText = (bestS < 0.70) ? "Result: Unknown" : "Result: " + bestM;
+            t.dispose();
+        }
+
+        function getPixels(id) {
+            const h = document.getElementById('hiddenCanvas'); 
+            const hctx = h.getContext('2d');
+            hctx.clearRect(0, 0, 28, 28);
+            hctx.drawImage(document.getElementById(id), 0, 0, 28, 28);
+            const d = hctx.getImageData(0, 0, 28, 28).data;
+            const g = new Float32Array(784);
+            let hasInk = false;
+            for (let i = 0; i < 784; i++) { g[i] = d[i * 4 + 3] / 255; if (g[i] > 0.1) hasInk = true; }
+            return { pixels: g, empty: !hasInk };
+        }
+
+        async function record(idx) {
+            const res = getPixels('trainCanvas'); if (res.empty) return;
+            inputs.push(res.pixels); 
+            const l = [0, 0, 0]; l[idx] = 1; labels.push(l);
+            document.getElementById('count').innerText = inputs.length; 
+            clearCanvas('trainCanvas');
+        }
+
+        async function loadDataFromServer() {
+            try {
+                const response = await fetch(DATA_URL); 
+                if (!response.ok) throw new Error();
+                const data = await response.json(); 
+                inputs = data.inputs.map(arr => new Float32Array(arr));
+                labels = data.labels; 
+                document.getElementById('count').innerText = inputs.length;
+                document.getElementById('status').innerText = "Data loaded! Click START TRAINING.";
+            } catch (e) { document.getElementById('status').innerText = "Ready: Start drawing!"; }
+        }
+
+        function showTab(t) {
+            document.getElementById('train-tab').className = (t === 'train') ? 'tab-content active' : 'tab-content';
+            document.getElementById('predict-tab').className = (t === 'predict') ? 'tab-content active' : 'tab-content';
+        }
+
+        function exportData() {
+            if (inputs.length === 0) return;
+            const dataObj = { inputs: inputs.map(a => Array.from(a)), labels: labels };
+            const blob = new Blob([JSON.stringify(dataObj)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob); 
+            const a = document.createElement('a');
+            a.href = url; a.download = "my_data.json"; a.click();
+        }
+
+        function resetData() { if (confirm("Reset AI?")) { inputs = []; labels = []; isTrained = false; document.getElementById('count').innerText = 0; } }
+    </script>
+</body>
+</html>
