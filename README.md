@@ -7,7 +7,7 @@ This is a project I built for school to show how basic Machine Learning works. I
 2. Open it in a web browser like Chrome or Edge.
 3. **Note:** You need to be online so the app can grab the **TensorFlow.js** library (the "brain" of the project).
 
-## How the AI Works (The Simple Version)
+## How the AI Works
 * **Squishing the Image:** It shrinks everything down to a tiny **28x28 pixel** grid. This makes it way faster and helps the AI focus on the main shape instead of small messy details.
 * **CNN (The Brain):** I used a **Convolutional Neural Network**. Think of it like a magnifying glass that slides over the image looking for specific things like straight lines or curves.
 
